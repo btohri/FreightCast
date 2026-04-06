@@ -54,6 +54,25 @@ async function fetchWeatherFull(lat, lon) {
     }
 }
 
+function getLocalDateInfo(timezone, offsetDays = 0, baseDate = new Date()) {
+    const shiftedDate = new Date(baseDate.getTime() + offsetDays * 24 * 60 * 60 * 1000);
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'short'
+    }).formatToParts(shiftedDate);
+
+    const lookup = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+    return {
+        dateStr: `${lookup.year}-${lookup.month}-${lookup.day}`,
+        dayOfWeek: weekdayMap[lookup.weekday]
+    };
+}
+
 // WMO Weather Code 解析
 function interpretWeatherCode(code) {
     if (code === null || code === undefined) return { label: "未知", severity: 0 };
@@ -69,8 +88,10 @@ function interpretWeatherCode(code) {
 }
 
 // 計算天氣延遲（區分空運/海運）
-function calcWeatherDelay(weatherData, freightType) {
+function calcWeatherDelay(weatherData, freightType, options = {}) {
     if (!weatherData) return { delayDays: 0, reasons: [], details: null };
+
+    const { locationRole = 'waypoint', transitWindow = null } = options;
 
     const current = weatherData.current || {};
     const daily = weatherData.daily || {};
@@ -100,7 +121,14 @@ function calcWeatherDelay(weatherData, freightType) {
     }
 
     // -- 未來 3 日預報惡化判定 --
-    if (daily && daily.wind_speed_10m_max && daily.weather_code) {
+    const shouldUseFutureForecast = !(
+        locationRole === 'destination' &&
+        transitWindow &&
+        Number.isFinite(transitWindow.min) &&
+        transitWindow.min > 3
+    );
+
+    if (shouldUseFutureForecast && daily && daily.wind_speed_10m_max && daily.weather_code) {
         let futureBadDays = 0;
         for (let i = 1; i < Math.min(daily.wind_speed_10m_max.length, 4); i++) {
             const fWind = daily.wind_speed_10m_max[i] || 0;
@@ -140,26 +168,25 @@ async function fetchPublicHolidays(countryCode) {
     }
 }
 
-function calcHolidayDelay(srcHolidays, dstHolidays, srcCountry, dstCountry, srcName, dstName) {
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+function calcHolidayDelay(srcHolidays, dstHolidays, srcName, dstName, srcTimezone, dstTimezone) {
     let delayDays = 0;
     let reasons = [];
 
-    // 週末判定
-    const dayOfWeek = today.getDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
+    const srcToday = getLocalDateInfo(srcTimezone);
+    const dstToday = getLocalDateInfo(dstTimezone);
+
+    // 以出發地當地時區判定出貨作業日
+    if (srcToday.dayOfWeek === 0 || srcToday.dayOfWeek === 6) {
         delayDays += 1;
-        reasons.push("今天是週末 (海關/倉儲休息)");
+        reasons.push(`${srcName}當地今天是週末 (海關/倉儲休息)`);
     }
-    // 週五出貨要等週一才真正處理
-    if (dayOfWeek === 5) {
+    if (srcToday.dayOfWeek === 5) {
         delayDays += 2;
-        reasons.push("週五出貨 (需等至週一處理)");
+        reasons.push(`${srcName}當地為週五出貨 (需等至週一處理)`);
     }
 
     // 出發地節假日
-    const srcHolidayToday = srcHolidays.find(h => h.date === todayStr);
+    const srcHolidayToday = srcHolidays.find(h => h.date === srcToday.dateStr);
     if (srcHolidayToday) {
         delayDays += 1;
         reasons.push(`${srcName}國定假日: ${srcHolidayToday.localName}`);
@@ -167,23 +194,21 @@ function calcHolidayDelay(srcHolidays, dstHolidays, srcCountry, dstCountry, srcN
     // 檢查未來 3 天出發地是否有連假
     let srcUpcoming = 0;
     for (let i = 1; i <= 3; i++) {
-        const d = new Date(today); d.setDate(today.getDate() + i);
-        const ds = d.toISOString().split('T')[0];
+        const ds = getLocalDateInfo(srcTimezone, i).dateStr;
         if (srcHolidays.find(h => h.date === ds)) srcUpcoming++;
     }
     if (srcUpcoming >= 2) { delayDays += 2; reasons.push(`${srcName}近日連假 (${srcUpcoming}天)`); }
     else if (srcUpcoming === 1) { delayDays += 1; reasons.push(`${srcName}明後天有假日`); }
 
     // 目的地節假日
-    const dstHolidayToday = dstHolidays.find(h => h.date === todayStr);
+    const dstHolidayToday = dstHolidays.find(h => h.date === dstToday.dateStr);
     if (dstHolidayToday) {
         delayDays += 1;
         reasons.push(`${dstName}國定假日: ${dstHolidayToday.localName}`);
     }
     let dstUpcoming = 0;
     for (let i = 1; i <= 3; i++) {
-        const d = new Date(today); d.setDate(today.getDate() + i);
-        const ds = d.toISOString().split('T')[0];
+        const ds = getLocalDateInfo(dstTimezone, i).dateStr;
         if (dstHolidays.find(h => h.date === ds)) dstUpcoming++;
     }
     if (dstUpcoming >= 2) { delayDays += 2; reasons.push(`${dstName}近日連假 (${dstUpcoming}天)`); }
@@ -263,7 +288,7 @@ function calcChokePointRisk(srcRegion, dstRegion, freightType) {
 // ============================================
 function getTransitKey(r1, r2) { return [r1, r2].sort().join("_"); }
 
-function renderWeatherCard(weatherData, containerId, cityNameId, cityName, freightType) {
+function renderWeatherCard(weatherData, containerId, cityNameId, cityName, freightType, options = {}) {
     const container = document.getElementById(containerId);
     document.getElementById(cityNameId).textContent = cityName;
 
@@ -277,7 +302,7 @@ function renderWeatherCard(weatherData, containerId, cityNameId, cityName, freig
     const prec = current.precipitation || 0;
     const code = current.weather_code;
     const info = interpretWeatherCode(code);
-    const result = calcWeatherDelay(weatherData, freightType);
+    const result = calcWeatherDelay(weatherData, freightType, options);
 
     let html = `<span><i class="ph ph-sun"></i> 天況: ${info.label}</span>`;
     html += `<span><i class="ph ph-wind"></i> 風速: ${wind} km/h</span>`;
@@ -352,9 +377,22 @@ document.addEventListener('DOMContentLoaded', () => {
             ]);
 
             // ========== 計算各模組延遲 ==========
-            const srcWeatherResult = calcWeatherDelay(srcWeatherData, type);
-            const dstWeatherResult = calcWeatherDelay(dstWeatherData, type);
-            const holidayResult = calcHolidayDelay(srcHolidays, dstHolidays, srcData.country, dstData.country, srcData.name, dstData.name);
+            const srcWeatherResult = calcWeatherDelay(srcWeatherData, type, {
+                locationRole: 'source',
+                transitWindow: baseTimes
+            });
+            const dstWeatherResult = calcWeatherDelay(dstWeatherData, type, {
+                locationRole: 'destination',
+                transitWindow: baseTimes
+            });
+            const holidayResult = calcHolidayDelay(
+                srcHolidays,
+                dstHolidays,
+                srcData.name,
+                dstData.name,
+                srcData.timezone,
+                dstData.timezone
+            );
             const seasonResult = calcSeasonalRisk(srcRegion, dstRegion, type);
             const chokeResult = calcChokePointRisk(srcRegion, dstRegion, type);
 
@@ -370,6 +408,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (chokeResult.reasons.length) allReasons.push(...chokeResult.reasons.map(r => `[航線] ${r}`));
 
             if (profKey) {
+                // Placeholder weighting until a real congestion API is wired in.
+                // Candidate providers:
+                // - AviationStack signup: https://aviationstack.com/signup
+                // - Terminal49 quickstart / API key setup: https://terminal49.com/docs/api-docs/in-depth-guides/quickstart/
                 let extra = Math.floor(Math.random() * 3) + 1;
                 totalDelayDays += extra;
                 allReasons.push(`[API] 物流樞紐壅塞指數 (+${extra} 天)`);
@@ -381,8 +423,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const finalReasonStr = allReasons.length > 0 ? allReasons.join(' / ') : "各項環境與營運狀況良好，預計準時";
 
             // ========== 渲染天氣卡片 ==========
-            renderWeatherCard(srcWeatherData, 'srcWeather', 'srcCityName', srcData.name, type);
-            renderWeatherCard(dstWeatherData, 'dstWeather', 'dstCityName', dstData.name, type);
+            renderWeatherCard(srcWeatherData, 'srcWeather', 'srcCityName', srcData.name, type, {
+                locationRole: 'source',
+                transitWindow: baseTimes
+            });
+            renderWeatherCard(dstWeatherData, 'dstWeather', 'dstCityName', dstData.name, type, {
+                locationRole: 'destination',
+                transitWindow: baseTimes
+            });
 
             // ========== 渲染風險逐項清單 ==========
             const riskList = document.getElementById('riskList');
