@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Cargo Delay Estimator | 全球貨運預估 (Real-Data)</title>
+    <meta name="description" content="結合真實天氣系統與船舶雷達的貨運延遲預估工具">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+</head>
+<body>
+    <div class="background-elements">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <main class="app-container">
+        <header>
+            <h1>Freight<span class="highlight">Cast</span></h1>
+            <p>即時環境數據・物流延遲預估系統</p>
+        </header>
+
+        <section class="api-key-section">
+            <div class="input-group">
+                <label for="profApiKey"><i class="ph ph-key"></i> 專業物流 API 金鑰 (選填 - 未來擴充用)</label>
+                <input type="password" id="profApiKey" placeholder="輸入 AviationStack 或 Terminal49 API Key" class="styled-input">
+                <small class="text-muted">若不填寫，系統將採用免費天氣與節假日混合模型進行環境預測。</small>
+            </div>
+        </section>
+
+        <section class="form-section">
+            <div class="input-group">
+                <label for="source"><i class="ph ph-map-pin"></i> 出發地 (Source)</label>
+                <select id="source">
+                    <option value="" disabled selected>請選擇啟運城市</option>
+                    <optgroup label="亞洲">
+                        <option value="TPE">台北 (TPE) - 台灣</option>
+                        <option value="TYO">東京 (TYO) - 日本</option>
+                        <option value="SHA">上海 (SHA) - 中國</option>
+                        <option value="SIN">新加坡 (SIN) - 新加坡</option>
+                    </optgroup>
+                    <optgroup label="北美洲">
+                        <option value="LAX">洛杉磯 (LAX) - 美國</option>
+                        <option value="JFK">紐約 (JFK) - 美國</option>
+                    </optgroup>
+                    <optgroup label="歐洲">
+                        <option value="RTM">鹿特丹 (RTM) - 荷蘭</option>
+                        <option value="LHR">倫敦 (LHR) - 英國</option>
+                        <option value="FRA">法蘭克福 (FRA) - 德國</option>
+                    </optgroup>
+                    <optgroup label="中東">
+                        <option value="DXB">杜拜 (DXB) - 阿聯酋</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label for="destination"><i class="ph ph-flag-checkered"></i> 目的地 (Destination)</label>
+                <select id="destination">
+                    <option value="" disabled selected>請選擇目的城市</option>
+                    <optgroup label="亞洲">
+                        <option value="TPE">台北 (TPE) - 台灣</option>
+                        <option value="TYO">東京 (TYO) - 日本</option>
+                        <option value="SHA">上海 (SHA) - 中國</option>
+                        <option value="SIN">新加坡 (SIN) - 新加坡</option>
+                    </optgroup>
+                    <optgroup label="北美洲">
+                        <option value="LAX">洛杉磯 (LAX) - 美國</option>
+                        <option value="JFK">紐約 (JFK) - 美國</option>
+                    </optgroup>
+                    <optgroup label="歐洲">
+                        <option value="RTM">鹿特丹 (RTM) - 荷蘭</option>
+                        <option value="LHR">倫敦 (LHR) - 英國</option>
+                        <option value="FRA">法蘭克福 (FRA) - 德國</option>
+                    </optgroup>
+                    <optgroup label="中東">
+                        <option value="DXB">杜拜 (DXB) - 阿聯酋</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <div class="toggle-group">
+                <label class="radio-card">
+                    <input type="radio" name="freightType" value="air" checked>
+                    <div class="card-content">
+                        <i class="ph ph-airplane-tilt"></i>
+                        <span>空運 (Air)</span>
+                    </div>
+                </label>
+                <label class="radio-card">
+                    <input type="radio" name="freightType" value="sea">
+                    <div class="card-content">
+                        <i class="ph ph-boat"></i>
+                        <span>海運 (Sea)</span>
+                    </div>
+                </label>
+            </div>
+
+            <button id="calculateBtn" class="primary-btn">
+                <span id="btnText">啟動環境數據分析</span>
+                <i class="ph ph-spinner-gap spinner hidden" id="loadingIcon"></i>
+            </button>
+        </section>
+
+        <!-- Result Section -->
+        <section id="resultSection" class="result-section hidden">
+            <!-- Source & Dest Weather Live Info -->
+            <div class="weather-grid">
+                <div class="weather-card">
+                    <h4 class="city-name" id="srcCityName">出發地</h4>
+                    <p class="real-time-badge">即時天氣與狀態</p>
+                    <div class="weather-details" id="srcWeather">
+                        --
+                    </div>
+                </div>
+                <div class="weather-card">
+                    <h4 class="city-name" id="dstCityName">目的地</h4>
+                    <p class="real-time-badge">即時天氣與狀態</p>
+                    <div class="weather-details" id="dstWeather">
+                        --
+                    </div>
+                </div>
+            </div>
+
+            <div class="cards-grid">
+                <div class="result-card stat-card">
+                    <i class="ph ph-hourglass-high icon-blue"></i>
+                    <h3>標準基線時間</h3>
+                    <p id="standardTime" class="value">-- 天</p>
+                </div>
+                <div class="result-card stat-card">
+                    <i class="ph ph-warning icon-orange"></i>
+                    <h3>真實環境延遲判定</h3>
+                    <p id="delayReason" class="value text-warning">分析中...</p>
+                    <small id="delayDays">延遲 +0 天</small>
+                </div>
+            </div>
+
+            <!-- Detailed Risk Breakdown -->
+            <div class="result-card risk-breakdown-card" id="riskBreakdownCard" style="margin-bottom:1rem;">
+                <h3 style="display:flex;align-items:center;gap:6px;margin-bottom:0.8rem;">
+                    <i class="ph ph-list-checks" style="font-size:1.2rem;color:var(--primary);"></i>
+                    延遲因素逐項分析
+                </h3>
+                <ul id="riskList" class="risk-list">
+                    <!-- JS will inject items here -->
+                </ul>
+            </div>
+            
+            <div class="result-card final-card">
+                <h3>預計總耗時 (實際狀況校正後)</h3>
+                <div class="final-days-wrapper">
+                    <span id="finalDays" class="massive-value">--</span>
+                    <span class="days-label">Days</span>
+                </div>
+                <p id="routeText">從 - 運送至 -</p>
+                <div id="apiKeyStatusBox" class="api-status-box hidden">
+                    <i class="ph ph-key"></i> 已啟用自訂物流 API
+                </div>
+                <button id="copySummaryBtn" class="copy-btn hidden">
+                    <i class="ph ph-copy"></i> 複製分析摘要
+                </button>
+            </div>
+
+            <!-- Live Radar Map Embed -->
+            <div class="radar-section" id="radarSection">
+                <h3><i class="ph ph-radar"></i> 目的地即時雷達海圖</h3>
+                <p class="text-muted small-text">此圖表為當地目前真實的船舶密集度即時影像，助您掌握該樞紐港口的整體壅塞情況。</p>
+                <div class="map-container" id="mapContainer">
+                    <!-- Iframe injected by JS -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
