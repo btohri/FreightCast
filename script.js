@@ -40,12 +40,13 @@ const baseTransitTimes = {
 // ============================================
 async function fetchWeatherFull(lat, lon) {
     try {
-        const res = await fetch(
-            `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-            `&current=precipitation,wind_speed_10m,weather_code` +
-            `&daily=precipitation_sum,wind_speed_10m_max,weather_code` +
-            `&forecast_days=4&timezone=auto`
-        );
+        const params = new URLSearchParams({
+            lat: String(lat),
+            lon: String(lon),
+            timezone: 'auto'
+        });
+        const res = await fetch(`/api/weather?${params.toString()}`);
+        if (!res.ok) throw new Error(`Weather request failed: ${res.status}`);
         const data = await res.json();
         return data;
     } catch (e) {
@@ -159,7 +160,11 @@ function calcWeatherDelay(weatherData, freightType, options = {}) {
 async function fetchPublicHolidays(countryCode) {
     const year = new Date().getFullYear();
     try {
-        const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/${countryCode}`);
+        const params = new URLSearchParams({
+            country: countryCode,
+            year: String(year)
+        });
+        const res = await fetch(`/api/holidays?${params.toString()}`);
         if (!res.ok) return [];
         return await res.json();
     } catch (e) {
